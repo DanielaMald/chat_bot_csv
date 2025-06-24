@@ -7,74 +7,50 @@ import streamlit as st
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
-st.set_page_config(page_title="Chatbot-csv", page_icon="🌸", layout="centered")
+st.set_page_config(page_title="Chatbot CSV Inteligente", page_icon="🤖", layout="centered")
 
-#CSS
+# CSS
 st.markdown("""
     <style>
     .main {
-        background: linear-gradient(135deg, #ffe6f0 0%, #fff0f5 100%);
-        font-family: 'Comic Sans MS', cursive, sans-serif;
-        color: #D6CCD8FF;
+        background: linear-gradient(135deg, #f0f8ff 0%, #fff 100%);
+        font-family: 'Arial', sans-serif;
+        color: #333;
     }
     h1 {
-        color: #d147a3;
+        color: #1a73e8;
         font-weight: 700;
-        font-size: 3rem;
+        font-size: 2.5rem;
         text-align: center;
-        margin-bottom: 0.3rem;
-    }
-    .stTextInput>div>div>input {
-        border-radius: 15px;
-        border: 2px solid #d147a3;
-        padding: 10px 15px;
-        font-size: 1.1rem;
-        color: #D3C6D6FF;
-    }
-    div.stButton > button {
-        background-color: #d147a3;
-        color: white;
-        font-weight: 700;
-        border-radius: 12px;
-        padding: 10px 20px;
-        transition: background-color 0.3s ease;
-        font-size: 1.1rem;
-        width: 100%;
-        margin-top: 10px;
-    }
-    div.stButton > button:hover {
-        background-color: #a2337a;
-        cursor: pointer;
-    }
-    .stDataFrame {
-        border-radius: 15px;
-        border: 2px solid #d147a3;
-        padding: 10px;
-        margin-top: 15px;
-        background: white;
-        color: #DBD1DDFF !important;
-    }
-    .stAlert {
-        background-color: #131112FF !important;
-        border-left: 6px solid #d147a3 !important;
-        color: #4b2354 !important;
-        border-radius: 10px;
-        font-size: 1.1rem;
-        padding: 15px;
-        margin-top: 20px;
-        white-space: pre-wrap;
+        margin-bottom: 0.5rem;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# APP
-st.title("🌸 Chatbot-csv 🌸")
+st.title("🤖 Chatbot CSV Inteligente")
 
-archivo = st.file_uploader("📁 Sube cualquier CSV", type="csv")
+archivo = st.file_uploader("📂 Sube tu archivo CSV", type="csv")
+
+TOP_N = 5
+
+def es_columna_numerica(serie):
+    return pd.api.types.is_numeric_dtype(serie)
+
+def es_columna_fecha(serie):
+    return pd.api.types.is_datetime64_any_dtype(serie)
+
+def es_columna_categorica(serie):
+    return (serie.dtype == 'object' or pd.api.types.is_string_dtype(serie)) and (serie.nunique() < len(serie)*0.5)
 
 if archivo:
     df = pd.read_csv(archivo)
     st.dataframe(df)
+
+    for col in df.columns:
+        try:
+            df[col] = pd.to_datetime(df[col], errors='ignore', infer_datetime_format=True)
+        except:
+            pass
 
     filas_texto = df.astype(str).agg(' | '.join, axis=1).tolist()
 
@@ -82,119 +58,117 @@ if archivo:
     def cargar_modelo():
         return SentenceTransformer('all-MiniLM-L6-v2')
 
-    model = cargar_modelo()
+    modelo = cargar_modelo()
+    embeddings_filas = modelo.encode(filas_texto, convert_to_tensor=True)
+    embeddings_columnas = modelo.encode(df.columns.tolist(), convert_to_tensor=True)
 
-    @st.cache_resource(show_spinner=True)
-    def crear_embeddings(textos):
-        return model.encode(textos, convert_to_tensor=True)
-
-    embeddings_filas = crear_embeddings(filas_texto)
-
-    pregunta = st.text_input("💬 Haz cualquier pregunta sobre los datos:")
+    pregunta = st.text_input("💬 Haz una pregunta sobre los datos:")
 
     if pregunta:
         pregunta_lower = pregunta.lower()
+        pregunta_emb = modelo.encode(pregunta, convert_to_tensor=True)
+        similitudes_columnas = cosine_similarity(pregunta_emb.reshape(1, -1), embeddings_columnas)[0]
+        columnas_ordenadas = df.columns[np.argsort(similitudes_columnas)[::-1]]
 
-        # RESPUESTAS DIRECTAS
-        if "cuántas filas" in pregunta_lower or "cuantas filas" in pregunta_lower:
-            st.info(f"📊 El archivo tiene **{len(df)} filas**.")
-
-        elif "cuántas columnas" in pregunta_lower or "cuantos campos" in pregunta_lower or "cuantas columnas" in pregunta_lower:
-            st.info(f"📊 El archivo tiene **{len(df.columns)} columnas**.")
-
-        elif "cómo se llaman las columnas" in pregunta_lower or "nombres de columnas" in pregunta_lower or "campos" in pregunta_lower:
-            st.info("📋 Los campos son:\n\n- " + "\n- ".join(df.columns))
-
-        elif "hay una columna" in pregunta_lower or "existe el campo" in pregunta_lower:
-            palabras = pregunta_lower.split()
-            for palabra in palabras:
-                if palabra in [c.lower() for c in df.columns]:
-                    st.success(f"✅ Sí, existe una columna llamada '{palabra}'.")
-                    break
-            else:
-                st.warning("❌ No encontré una columna con ese nombre.")
-
-       
-        elif ("qué" in pregunta_lower or "cuales" in pregunta_lower) and ("son" in pregunta_lower):
-            match = re.search(r"(\w+)\s+son\s+(\w+)", pregunta_lower)
-            if match:
-                categoria, valor = match.groups()
-                col_match = [col for col in df.columns if categoria.lower() in col.lower()]
-                if col_match:
-                    col = col_match[0]
-                    filtro = df[df[col].astype(str).str.lower().str.contains(valor.lower())]
-                    st.success(f"🔍 Hay **{len(filtro)}** registros donde '{col}' contiene '{valor}'.")
-                    st.dataframe(filtro)
-                else:
-                    st.warning(f"⚠️ No encontré una columna que coincida con '{categoria}'.")
-
-        
-        elif "cuestan más de" in pregunta_lower or "precio mayor a" in pregunta_lower:
-            match = re.search(r"(cuestan más de|precio mayor a)\s+(\d+(\.\d+)?)", pregunta_lower)
-            if match:
-                valor = float(match.group(2))
-                col_match = [col for col in df.columns if "precio" in col.lower() or "costo" in col.lower()]
-                if col_match:
-                    col = col_match[0]
-                    filtrado = df[df[col] > valor]
-                    st.success(f"💰 Hay **{len(filtrado)}** registros con '{col}' mayor a {valor}.")
-                    st.dataframe(filtrado)
-                else:
-                    st.warning("⚠️ No se encontró una columna de precio o costo.")
-
-      
-        elif "stock mayor a" in pregunta_lower:
-            match = re.search(r"stock mayor a\s+(\d+)", pregunta_lower)
-            if match:
-                valor = int(match.group(1))
-                col_match = [col for col in df.columns if "stock" in col.lower() or "cantidad" in col.lower()]
-                if col_match:
-                    col = col_match[0]
-                    filtrado = df[df[col] > valor]
-                    st.success(f"📦 Hay **{len(filtrado)}** registros con '{col}' mayor a {valor}.")
-                    st.dataframe(filtrado)
-                else:
-                    st.warning("⚠️ No se encontró una columna de stock o cantidad.")
-
-       
-        elif "antes de" in pregunta_lower:
-            match = re.search(r"antes de\s+(\d{4}-\d{2}-\d{2})", pregunta_lower)
-            if match:
-                fecha = match.group(1)
-                col_match = [col for col in df.columns if "fecha" in col.lower() or "ingreso" in col.lower()]
-                if col_match:
-                    col = col_match[0]
-                    df[col] = pd.to_datetime(df[col], errors='coerce')
-                    filtrado = df[df[col] < pd.to_datetime(fecha)]
-                    st.success(f"📅 Hay **{len(filtrado)}** registros con '{col}' antes de {fecha}.")
-                    st.dataframe(filtrado)
-                else:
-                    st.warning("⚠️ No se encontró columna de fecha.")
-
-      
-        elif "estado" in pregunta_lower or "status" in pregunta_lower:
-            for valor in ["pendiente", "cancelado", "no pagado", "activo", "inactivo"]:
-                if valor in pregunta_lower:
-                    col_match = [col for col in df.columns if "estado" in col.lower() or "status" in col.lower()]
-                    if col_match:
-                        col = col_match[0]
-                        filtrado = df[df[col].astype(str).str.lower().str.contains(valor)]
-                        st.success(f"📋 Hay **{len(filtrado)}** registros con '{col}' igual a '{valor}'.")
-                        st.dataframe(filtrado)
+        if match := re.search(r'(mayor|menor|m[aá]s|menos|superior|inferior)\s+(?:a|de)?\s*(\d+(\.\d+)?)', pregunta_lower):
+            operador, valor, _ = match.groups()
+            valor = float(valor)
+            for col in columnas_ordenadas:
+                if not es_columna_numerica(df[col]):
+                    continue
+                try:
+                    if 'mayor' in operador or 'más' in operador or 'superior' in operador:
+                        filtrado = df[df[col] > valor]
                     else:
-                        st.warning("⚠️ No se encontró columna de estado o status.")
-                    break
+                        filtrado = df[df[col] < valor]
+                    if not filtrado.empty:
+                        st.success(f"🔎 Filtrado con '{col}' {operador} {valor}: {len(filtrado)} resultados")
+                        st.dataframe(filtrado)
+                        break
+                except:
+                    continue
+
+        elif re.search(r'(cu[aá]l|qu[eé])\s+(es|fue)?\s*(el|la)?\s*[\w\s]\s(m[aá]s|mayor|menos|menor)', pregunta_lower):
+            # Checar si se refiere a longitud de texto
+            if 'largo' in pregunta_lower or 'extenso' in pregunta_lower or 'longitud' in pregunta_lower:
+                for col in columnas_ordenadas:
+                    if not pd.api.types.is_string_dtype(df[col]):
+                        continue
+                    try:
+                        idx = df[col].astype(str).str.len().idxmax()
+                        fila = df.loc[[idx]]
+                        st.success(f"🔤 Resultado con texto más largo en '{col}':")
+                        st.dataframe(fila)
+                        break
+                    except:
+                        continue
+            else:
+                for col in columnas_ordenadas:
+                    if not es_columna_numerica(df[col]):
+                        continue
+                    try:
+                        if df[col].isnull().all():
+                            continue
+                        buscar_max = any(p in pregunta_lower for p in ['más', 'mayor', 'alto', 'caro', 'grande', 'pesado', 'calorías', 'cantidad'])
+                        if buscar_max:
+                            idx = df[col].idxmax()
+                        else:
+                            idx = df[col].idxmin()
+                        fila = df.loc[[idx]]
+                        st.success(f"🔝 Resultado usando la columna numérica '{col}':")
+                        st.dataframe(fila)
+                        break
+                    except:
+                        continue
+
+        elif match := re.search(r'(antes|después|despues)\s+de\s+(\d{4}-\d{2}-\d{2})', pregunta_lower):
+            operador, fecha_str = match.groups()
+            fecha = pd.to_datetime(fecha_str)
+            for col in columnas_ordenadas:
+                if not es_columna_fecha(df[col]):
+                    continue
+                try:
+                    if 'antes' in operador:
+                        filtrado = df[df[col] < fecha]
+                    else:
+                        filtrado = df[df[col] > fecha]
+                    if not filtrado.empty:
+                        st.success(f"📅 Resultados con fecha {operador} de {fecha_str} en '{col}':")
+                        st.dataframe(filtrado)
+                        break
+                except:
+                    continue
+
+        elif any(pal in pregunta_lower for pal in ['cuántos', 'cuantas', 'cuantos', 'cantidad de', 'número de', 'cuenta', 'listado de', 'qué tipos', 'qué clases', 'categorías', 'tipos', 'clases', 'lista de']):
+            for col in columnas_ordenadas:
+                if not es_columna_categorica(df[col]):
+                    continue
+                try:
+                    conteo = df[col].value_counts().head(TOP_N)
+                    if len(conteo) > 1:
+                        st.success(f"📊 Conteo de categorías en '{col}':")
+                        st.dataframe(conteo)
+                        break
+                except:
+                    continue
 
         else:
-            emb_pregunta = model.encode(pregunta, convert_to_tensor=True)
-            similitudes = cosine_similarity(emb_pregunta.reshape(1, -1), embeddings_filas)[0]
-            idx_mejor = np.argmax(similitudes)
-            mejor_similitud = similitudes[idx_mejor]
-
-            UMBRAL_SIMILITUD = 0.4
-            if mejor_similitud >= UMBRAL_SIMILITUD:
-                st.write("✅ Fila más relevante encontrada:")
-                st.dataframe(df.iloc[[idx_mejor]])
-                st.write(f"🔍 Similitud: {mejor_similitud:.3f}")
-            else:
-                st.warning("❌ No encontré información relacionada con tu pregunta en el archivo.")
+            encontrado = False
+            for col in columnas_ordenadas:
+                try:
+                    coincidencias = df[df[col].astype(str).str.lower().str.contains(pregunta_lower)]
+                    if not coincidencias.empty:
+                        st.success(f"🔍 Coincidencias encontradas en '{col}':")
+                        st.dataframe(coincidencias)
+                        encontrado = True
+                        break
+                except:
+                    continue
+            if not encontrado:
+                similitudes_filas = cosine_similarity(pregunta_emb.reshape(1, -1), embeddings_filas)[0]
+                idx = np.argmax(similitudes_filas)
+                if similitudes_filas[idx] > 0.45:
+                    st.info("🤖 Resultado más cercano encontrado:")
+                    st.dataframe(df.loc[[idx]])
+                else:
+                    st.warning("❌ No encontré información relacionada con tu pregunta.")
